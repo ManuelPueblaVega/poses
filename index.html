@@ -2,163 +2,213 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Notas con PoseNet</title>
+  <title>Danza y Sonido</title>
+  <!-- Cargamos p5.js, p5.sound y ml5.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/addons/p5.sound.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ml5/0.12.2/ml5.min.js"></script>
   <style>
     body {
-      margin: 0;
-      padding: 0;
-      text-align: center;
-      background: #222;
-      color: #fff;
       font-family: sans-serif;
+      text-align: center;
+      background: #f0f0f0;
+      margin: 0;
+      padding: 20px;
     }
-    #contenedor {
+    #canvasContainer {
       display: inline-block;
       position: relative;
+      margin-top: 20px;
     }
     canvas {
-      border: 1px solid #fff;
+      border: 2px solid #333;
     }
-    #controles {
-      margin-top: 10px;
-    }
-    button, select {
-      font-size: 16px;
-      margin: 5px;
-      padding: 5px 10px;
+    .controls {
+      margin: 10px;
     }
   </style>
-  <!-- Se incluyen las librerías p5.js, p5.sound y ml5.js -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/addons/p5.sound.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/ml5@latest/dist/ml5.min.js"></script>
 </head>
 <body>
-  <h1>Interfaz de Notas con PoseNet</h1>
-  <div id="contenedor"></div>
-  <div id="controles"></div>
-  
+  <h1>Danza y Sonido</h1>
+  <div class="controls">
+    <label for="scaleSelect">Selecciona Escala: </label>
+    <select id="scaleSelect">
+      <option value="C_Major">C Mayor</option>
+      <option value="C_Minor">C Menor</option>
+      <option value="Pentatonic">Pentatónica</option>
+    </select>
+  </div>
+  <div class="controls">
+    <button id="startButton">Iniciar</button>
+    <button id="stopButton">Terminar</button>
+  </div>
+  <div id="canvasContainer"></div>
+
   <script>
-    let video, poseNet, poses = [];
-    let startButton, stopButton, scaleSelect;
-    let osc;
-    let playing = false;
-    
-    // Definición de escalas: los arreglos contienen frecuencias en Hz en orden ascendente.
+    let video;
+    let poseNet;
+    let poses = [];
+    let osc;                // Oscilador para generar sonido
+    let playing = false;    // Bandera para saber si se está en "modo danza"
+    let currentScale = [];  // Arreglo con las frecuencias de la escala actual
+
+    // Definición de escalas musicales (se especifican las notas en formato "C4", "Eb4", etc.)
     const scales = {
-      "C Major": [130.81, 146.83, 164.81, 174.61, 196.00, 220.00, 246.94, 261.63],
-      "A Minor": [220.00, 246.94, 261.63, 293.66, 329.63, 349.23, 392.00, 440.00],
-      "Pentatonic": [261.63, 293.66, 329.63, 392.00, 440.00]
+      "C_Major": ["C4", "D4", "E4", "F4", "G4", "A4", "B4", "C5"],
+      "C_Minor": ["C4", "D4", "Eb4", "F4", "G4", "Ab4", "Bb4", "C5"],
+      "Pentatonic": ["C4", "D4", "E4", "G4", "A4", "C5"]
     };
-    let currentScale = [];
-    
-    // Estos valores definen la extensión (en píxeles) mínima y máxima que esperamos detectar.
-    let minExtension = 50, maxExtension = 250;
-    
+
+    // Función para convertir una nota (por ejemplo "C4" o "Eb4") a frecuencia en Hz.
+    function noteToFreq(note) {
+      const noteIndices = {
+        "C": 0, "C#": 1, "Db": 1,
+        "D": 2, "D#": 3, "Eb": 3,
+        "E": 4,
+        "F": 5, "F#": 6, "Gb": 6,
+        "G": 7, "G#": 8, "Ab": 8,
+        "A": 9, "A#": 10, "Bb": 10,
+        "B": 11
+      };
+      // Se utiliza una expresión regular para separar la letra, el accidental (si lo hay) y la octava.
+      let regex = /^([A-G])([b#]?)(\d)$/;
+      let parts = note.match(regex);
+      if (parts) {
+        let letter = parts[1];
+        let accidental = parts[2];
+        let octave = parseInt(parts[3]);
+        let key = letter + accidental;
+        // Fórmula para calcular el número MIDI: MIDI = 12*(octava+1) + índice de la nota
+        let n = noteIndices[key] + 12 * (octave + 1);
+        // Fórmula para la frecuencia: f = 440 * 2^((n - 69) / 12)
+        return 440 * Math.pow(2, (n - 69) / 12);
+      }
+      return 0;
+    }
+
+    // p5.js: función setup()
     function setup() {
-      // Creamos el canvas y lo ubicamos dentro del div "contenedor"
+      // Creamos el canvas y lo ubicamos en el contenedor
       let canvas = createCanvas(640, 480);
-      canvas.parent('contenedor');
+      canvas.parent("canvasContainer");
       
-      // Capturamos video desde la cámara
+      // Capturamos el video de la cámara
       video = createCapture(VIDEO);
-      video.size(640, 480);
+      video.size(width, height);
       video.hide();
       
-      // Inicializamos PoseNet y asignamos la función callback
-      poseNet = ml5.poseNet(video, modelReady);
+      // Inicializamos PoseNet y asignamos la función callback para cuando se cargue el modelo
+      poseNet = ml5.poseNet(video, modelLoaded);
       poseNet.on('pose', function(results) {
         poses = results;
       });
       
-      // Creamos los controles en el div "controles"
-      startButton = createButton('Inicio');
-      startButton.parent('controles');
-      startButton.mousePressed(startSound);
-      
-      stopButton = createButton('Termino');
-      stopButton.parent('controles');
-      stopButton.mousePressed(stopSound);
-      
-      scaleSelect = createSelect();
-      scaleSelect.parent('controles');
-      // Agregamos las escalas disponibles al menú
-      for (let key in scales) {
-        scaleSelect.option(key);
-      }
-      scaleSelect.changed(changeScale);
-      // Escala por defecto
-      currentScale = scales[scaleSelect.value()];
-      
-      // Creamos el oscilador para generar sonido (tono sinusoidal)
+      // Creamos un oscilador para generar sonido (tipo sine)
       osc = new p5.Oscillator('sine');
-      osc.amp(0);
       osc.start();
+      osc.amp(0);  // Inicialmente en silencio
+      
+      // Escala por defecto: C Mayor (convertida a frecuencias)
+      currentScale = scales["C_Major"].map(noteToFreq);
     }
     
-    function modelReady() {
-      console.log("PoseNet está listo");
+    // Callback cuando PoseNet esté listo
+    function modelLoaded() {
+      console.log("PoseNet listo");
     }
     
+    // p5.js: función draw(), se ejecuta continuamente
     function draw() {
       // Mostramos el video en el canvas
       image(video, 0, 0, width, height);
       
-      // Si se detecta al menos una pose, procedemos
+      // Si no estamos en "modo danza" (es decir, si no se presionó Iniciar) no se procesa la pose
+      if (!playing) return;
+      
+      // Opcional: dibujamos los puntos clave detectados
+      drawKeypoints();
+      
+      // Si hay al menos una pose detectada...
       if (poses.length > 0) {
         let pose = poses[0].pose;
+        let leftWrist = pose.leftWrist;
+        let rightWrist = pose.rightWrist;
         
-        // Dibujamos algunos puntos de interés: muñecas y hombros
-        fill(255, 0, 0);
-        noStroke();
-        if (pose.leftWrist) ellipse(pose.leftWrist.x, pose.leftWrist.y, 10);
-        if (pose.rightWrist) ellipse(pose.rightWrist.x, pose.rightWrist.y, 10);
-        if (pose.leftShoulder) ellipse(pose.leftShoulder.x, pose.leftShoulder.y, 10);
-        if (pose.rightShoulder) ellipse(pose.rightShoulder.x, pose.rightShoulder.y, 10);
-        
-        // Si contamos con las coordenadas de ambos hombros y muñecas, calculamos la extensión.
-        if (pose.leftWrist && pose.leftShoulder && pose.rightWrist && pose.rightShoulder) {
-          let leftDist = dist(pose.leftWrist.x, pose.leftWrist.y, pose.leftShoulder.x, pose.leftShoulder.y);
-          let rightDist = dist(pose.rightWrist.x, pose.rightWrist.y, pose.rightShoulder.x, pose.rightShoulder.y);
-          let extension = (leftDist + rightDist) / 2;
+        // Comprobamos que la detección tenga la confianza suficiente
+        if (leftWrist.confidence > 0.2 && rightWrist.confidence > 0.2) {
+          // Dibujamos círculos en las muñecas para visualizarlas
+          fill(255, 0, 0);
+          noStroke();
+          ellipse(leftWrist.x, leftWrist.y, 10, 10);
+          ellipse(rightWrist.x, rightWrist.y, 10, 10);
           
-          // Se mapea la extensión a un índice del arreglo de la escala actual.
-          // Cuando la extensión es mínima (brazos pegados) se selecciona la nota grave;
-          // cuando es máxima (brazos extendidos) se selecciona la nota aguda.
+          // Calculamos la distancia entre las muñecas: cuando se estiran la distancia aumenta
+          let d = dist(leftWrist.x, leftWrist.y, rightWrist.x, rightWrist.y);
+          
+          // Definimos un rango de distancia (en píxeles) para el mapeo:
+          // - Cuando la distancia sea pequeña (brazos pegados) se reproducirá la nota grave.
+          // - Cuando sea grande (brazos extendidos) se reproducirá la nota aguda.
+          let minD = 50;
+          let maxD = 300;
+          d = constrain(d, minD, maxD);
+          
+          // Se obtiene un valor normalizado (entre 0 y 1) a partir de la distancia
+          let t = map(d, minD, maxD, 0, 1);
+          
+          // Se mapea el valor t al índice de la nota dentro de la escala actual
           let scaleLength = currentScale.length;
-          let index = floor(map(extension, minExtension, maxExtension, 0, scaleLength - 1, true));
-          index = constrain(index, 0, scaleLength - 1);
-          let freq = currentScale[index];
+          let noteIndex = floor(t * scaleLength);
+          noteIndex = constrain(noteIndex, 0, scaleLength - 1);
           
-          // Mostramos en el canvas la frecuencia calculada
-          fill(255);
-          textSize(24);
-          text("Frecuencia: " + nf(freq, 0, 2) + " Hz", 10, height - 20);
+          // Se obtiene la frecuencia correspondiente y se la asigna al oscilador
+          let freq = currentScale[noteIndex];
+          osc.freq(freq);
           
-          // Si se ha iniciado la reproducción, actualizamos la frecuencia del oscilador.
-          if (playing) {
-            osc.freq(freq);
-            osc.amp(0.5, 0.1);
+          // Opcional: se puede ajustar la amplitud en función de la distancia para dar más dinámica
+          let ampValue = map(d, minD, maxD, 0.1, 0.5);
+          osc.amp(ampValue, 0.1);
+        }
+      }
+    }
+    
+    // Función para dibujar todos los puntos clave detectados (opcional)
+    function drawKeypoints() {
+      for (let i = 0; i < poses.length; i++) {
+        let pose = poses[i].pose;
+        for (let j = 0; j < pose.keypoints.length; j++) {
+          let keypoint = pose.keypoints[j];
+          if (keypoint.score > 0.2) {
+            fill(0, 255, 0);
+            noStroke();
+            ellipse(keypoint.position.x, keypoint.position.y, 5, 5);
           }
         }
       }
     }
     
-    // Función para iniciar la generación del sonido.
-    function startSound() {
-      playing = true;
-    }
+    // EVENTOS DE LOS BOTONES E INTERFAZ
     
-    // Función para detener la generación del sonido.
-    function stopSound() {
+    // Botón Iniciar: activa la captura de audio y procesamiento de pose.
+    document.getElementById("startButton").addEventListener("click", function() {
+      playing = true;
+      // Reanudamos el contexto de audio (necesario en algunos navegadores)
+      getAudioContext().resume();
+      osc.amp(0.1, 0.1);
+    });
+    
+    // Botón Terminar: desactiva el procesamiento.
+    document.getElementById("stopButton").addEventListener("click", function() {
       playing = false;
       osc.amp(0, 0.5);
-    }
+    });
     
-    // Actualiza la escala musical según la selección del usuario.
-    function changeScale() {
-      currentScale = scales[scaleSelect.value()];
-    }
+    // Selector de Escala: al cambiar la escala se actualiza el arreglo de frecuencias.
+    document.getElementById("scaleSelect").addEventListener("change", function(e) {
+      let selected = e.target.value;
+      if (scales[selected]) {
+        currentScale = scales[selected].map(noteToFreq);
+      }
+    });
   </script>
 </body>
 </html>
