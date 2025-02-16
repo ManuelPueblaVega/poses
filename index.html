@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Notas con PoseNet y Calibración</title>
+  <title>Notas con PoseNet</title>
   <style>
     body {
       margin: 0;
@@ -34,17 +34,15 @@
   <script src="https://cdn.jsdelivr.net/npm/ml5@latest/dist/ml5.min.js"></script>
 </head>
 <body>
-  <h1>Interfaz de Notas con PoseNet y Calibración</h1>
+  <h1>Interfaz de Notas con PoseNet</h1>
   <div id="contenedor"></div>
   <div id="controles"></div>
   
   <script>
     let video, poseNet, poses = [];
     let startButton, stopButton, scaleSelect;
-    let calMinButton, calMaxButton;
     let osc;
     let playing = false;
-    let currentExtension = 0;
     
     // Definición de escalas: los arreglos contienen frecuencias en Hz en orden ascendente.
     const scales = {
@@ -54,8 +52,7 @@
     };
     let currentScale = [];
     
-    // Valores de calibración: extensión mínima y máxima.
-    // Inicialmente definidos a valores por defecto, pero se pueden calibrar con botones.
+    // Estos valores definen la extensión (en píxeles) mínima y máxima que esperamos detectar.
     let minExtension = 50, maxExtension = 250;
     
     function setup() {
@@ -68,9 +65,7 @@
       video.size(640, 480);
       video.hide();
       
-      // Inicializamos PoseNet y asignamos la función callback.
-      // Nota: PoseNet es una de las técnicas disponibles para la detección de poses.
-      // Si deseas utilizar otras técnicas, puedes explorar alternativas como MediaPipe Pose.
+      // Inicializamos PoseNet y asignamos la función callback
       poseNet = ml5.poseNet(video, modelReady);
       poseNet.on('pose', function(results) {
         poses = results;
@@ -84,15 +79,6 @@
       stopButton = createButton('Termino');
       stopButton.parent('controles');
       stopButton.mousePressed(stopSound);
-      
-      // Botones de calibración para extensión mínima y máxima
-      calMinButton = createButton('Calibrar Mínimo');
-      calMinButton.parent('controles');
-      calMinButton.mousePressed(calibrateMin);
-      
-      calMaxButton = createButton('Calibrar Máximo');
-      calMaxButton.parent('controles');
-      calMaxButton.mousePressed(calibrateMax);
       
       scaleSelect = createSelect();
       scaleSelect.parent('controles');
@@ -122,45 +108,32 @@
       if (poses.length > 0) {
         let pose = poses[0].pose;
         
-        // Dibujamos puntos de interés: muñecas, hombros y codos
+        // Dibujamos algunos puntos de interés: muñecas y hombros
         fill(255, 0, 0);
         noStroke();
         if (pose.leftWrist) ellipse(pose.leftWrist.x, pose.leftWrist.y, 10);
         if (pose.rightWrist) ellipse(pose.rightWrist.x, pose.rightWrist.y, 10);
         if (pose.leftShoulder) ellipse(pose.leftShoulder.x, pose.leftShoulder.y, 10);
         if (pose.rightShoulder) ellipse(pose.rightShoulder.x, pose.rightShoulder.y, 10);
-        if (pose.leftElbow) ellipse(pose.leftElbow.x, pose.leftElbow.y, 10);
-        if (pose.rightElbow) ellipse(pose.rightElbow.x, pose.rightElbow.y, 10);
         
-        // Calculamos la extensión utilizando muñecas y hombros.
-        // También se puede considerar la posición de los codos para una calibración más precisa.
+        // Si contamos con las coordenadas de ambos hombros y muñecas, calculamos la extensión.
         if (pose.leftWrist && pose.leftShoulder && pose.rightWrist && pose.rightShoulder) {
-          // Distancia de la muñeca al hombro para cada brazo
           let leftDist = dist(pose.leftWrist.x, pose.leftWrist.y, pose.leftShoulder.x, pose.leftShoulder.y);
           let rightDist = dist(pose.rightWrist.x, pose.rightWrist.y, pose.rightShoulder.x, pose.rightShoulder.y);
-          
-          // Si se dispone de los codos, podemos considerar su distancia al hombro
-          let leftElbowDist = pose.leftElbow ? dist(pose.leftElbow.x, pose.leftElbow.y, pose.leftShoulder.x, pose.leftShoulder.y) : leftDist;
-          let rightElbowDist = pose.rightElbow ? dist(pose.rightElbow.x, pose.rightElbow.y, pose.rightShoulder.x, pose.rightShoulder.y) : rightDist;
-          
-          // Promediamos las distancias para obtener una medida más robusta de la extensión
-          let extensionLeft = (leftDist + leftElbowDist) / 2;
-          let extensionRight = (rightDist + rightElbowDist) / 2;
-          let extension = (extensionLeft + extensionRight) / 2;
-          currentExtension = extension;  // Guardamos la extensión actual para la calibración
+          let extension = (leftDist + rightDist) / 2;
           
           // Se mapea la extensión a un índice del arreglo de la escala actual.
+          // Cuando la extensión es mínima (brazos pegados) se selecciona la nota grave;
+          // cuando es máxima (brazos extendidos) se selecciona la nota aguda.
           let scaleLength = currentScale.length;
           let index = floor(map(extension, minExtension, maxExtension, 0, scaleLength - 1, true));
           index = constrain(index, 0, scaleLength - 1);
           let freq = currentScale[index];
           
-          // Mostramos en el canvas la frecuencia calculada, la extensión actual y los valores de calibración
+          // Mostramos en el canvas la frecuencia calculada
           fill(255);
-          textSize(20);
-          text("Frecuencia: " + nf(freq, 0, 2) + " Hz", 10, height - 40);
-          text("Extensión: " + nf(extension, 0, 2), 10, height - 10);
-          text("Calibración (Min/Max): " + minExtension + " / " + maxExtension, 10, height - 70);
+          textSize(24);
+          text("Frecuencia: " + nf(freq, 0, 2) + " Hz", 10, height - 20);
           
           // Si se ha iniciado la reproducción, actualizamos la frecuencia del oscilador.
           if (playing) {
@@ -185,22 +158,6 @@
     // Actualiza la escala musical según la selección del usuario.
     function changeScale() {
       currentScale = scales[scaleSelect.value()];
-    }
-    
-    // Función para calibrar la extensión mínima (brazos pegados al cuerpo).
-    function calibrateMin() {
-      if (currentExtension > 0) {
-        minExtension = currentExtension;
-        console.log("Calibrado Min: " + minExtension);
-      }
-    }
-    
-    // Función para calibrar la extensión máxima (brazos extendidos).
-    function calibrateMax() {
-      if (currentExtension > 0) {
-        maxExtension = currentExtension;
-        console.log("Calibrado Max: " + maxExtension);
-      }
     }
   </script>
 </body>
