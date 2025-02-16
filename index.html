@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Notas con PoseNet y Calibración</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      text-align: center;
+      background: #222;
+      color: #fff;
+      font-family: sans-serif;
+    }
+    #contenedor {
+      display: inline-block;
+      position: relative;
+    }
+    canvas {
+      border: 1px solid #fff;
+    }
+    #controles {
+      margin-top: 10px;
+    }
+    button, select {
+      font-size: 16px;
+      margin: 5px;
+      padding: 5px 10px;
+    }
+  </style>
+  <!-- Se incluyen las librerías p5.js, p5.sound y ml5.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/addons/p5.sound.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ml5@latest/dist/ml5.min.js"></script>
+</head>
+<body>
+  <h1>Interfaz de Notas con PoseNet y Calibración</h1>
+  <div id="contenedor"></div>
+  <div id="controles"></div>
+  
+  <script>
+    let video, poseNet, poses = [];
+    let startButton, stopButton, scaleSelect;
+    let calMinButton, calMaxButton;
+    let osc;
+    let playing = false;
+    let currentExtension = 0;
+    
+    // Definición de escalas: los arreglos contienen frecuencias en Hz en orden ascendente.
+    const scales = {
+      "C Major": [130.81, 146.83, 164.81, 174.61, 196.00, 220.00, 246.94, 261.63],
+      "A Minor": [220.00, 246.94, 261.63, 293.66, 329.63, 349.23, 392.00, 440.00],
+      "Pentatonic": [261.63, 293.66, 329.63, 392.00, 440.00]
+    };
+    let currentScale = [];
+    
+    // Valores de calibración: extensión mínima y máxima.
+    // Inicialmente definidos a valores por defecto, pero se pueden calibrar con botones.
+    let minExtension = 50, maxExtension = 250;
+    
+    function setup() {
+      // Creamos el canvas y lo ubicamos dentro del div "contenedor"
+      let canvas = createCanvas(640, 480);
+      canvas.parent('contenedor');
+      
+      // Capturamos video desde la cámara
+      video = createCapture(VIDEO);
+      video.size(640, 480);
+      video.hide();
+      
+      // Inicializamos PoseNet y asignamos la función callback.
+      // Nota: PoseNet es una de las técnicas disponibles para la detección de poses.
+      // Si deseas utilizar otras técnicas, puedes explorar alternativas como MediaPipe Pose.
+      poseNet = ml5.poseNet(video, modelReady);
+      poseNet.on('pose', function(results) {
+        poses = results;
+      });
+      
+      // Creamos los controles en el div "controles"
+      startButton = createButton('Inicio');
+      startButton.parent('controles');
+      startButton.mousePressed(startSound);
+      
+      stopButton = createButton('Termino');
+      stopButton.parent('controles');
+      stopButton.mousePressed(stopSound);
+      
+      // Botones de calibración para extensión mínima y máxima
+      calMinButton = createButton('Calibrar Mínimo');
+      calMinButton.parent('controles');
+      calMinButton.mousePressed(calibrateMin);
+      
+      calMaxButton = createButton('Calibrar Máximo');
+      calMaxButton.parent('controles');
+      calMaxButton.mousePressed(calibrateMax);
+      
+      scaleSelect = createSelect();
+      scaleSelect.parent('controles');
+      // Agregamos las escalas disponibles al menú
+      for (let key in scales) {
+        scaleSelect.option(key);
+      }
+      scaleSelect.changed(changeScale);
+      // Escala por defecto
+      currentScale = scales[scaleSelect.value()];
+      
+      // Creamos el oscilador para generar sonido (tono sinusoidal)
+      osc = new p5.Oscillator('sine');
+      osc.amp(0);
+      osc.start();
+    }
+    
+    function modelReady() {
+      console.log("PoseNet está listo");
+    }
+    
+    function draw() {
+      // Mostramos el video en el canvas
+      image(video, 0, 0, width, height);
+      
+      // Si se detecta al menos una pose, procedemos
+      if (poses.length > 0) {
+        let pose = poses[0].pose;
+        
+        // Dibujamos puntos de interés: muñecas, hombros y codos
+        fill(255, 0, 0);
+        noStroke();
+        if (pose.leftWrist) ellipse(pose.leftWrist.x, pose.leftWrist.y, 10);
+        if (pose.rightWrist) ellipse(pose.rightWrist.x, pose.rightWrist.y, 10);
+        if (pose.leftShoulder) ellipse(pose.leftShoulder.x, pose.leftShoulder.y, 10);
+        if (pose.rightShoulder) ellipse(pose.rightShoulder.x, pose.rightShoulder.y, 10);
+        if (pose.leftElbow) ellipse(pose.leftElbow.x, pose.leftElbow.y, 10);
+        if (pose.rightElbow) ellipse(pose.rightElbow.x, pose.rightElbow.y, 10);
+        
+        // Calculamos la extensión utilizando muñecas y hombros.
+        // También se puede considerar la posición de los codos para una calibración más precisa.
+        if (pose.leftWrist && pose.leftShoulder && pose.rightWrist && pose.rightShoulder) {
+          // Distancia de la muñeca al hombro para cada brazo
+          let leftDist = dist(pose.leftWrist.x, pose.leftWrist.y, pose.leftShoulder.x, pose.leftShoulder.y);
+          let rightDist = dist(pose.rightWrist.x, pose.rightWrist.y, pose.rightShoulder.x, pose.rightShoulder.y);
+          
+          // Si se dispone de los codos, podemos considerar su distancia al hombro
+          let leftElbowDist = pose.leftElbow ? dist(pose.leftElbow.x, pose.leftElbow.y, pose.leftShoulder.x, pose.leftShoulder.y) : leftDist;
+          let rightElbowDist = pose.rightElbow ? dist(pose.rightElbow.x, pose.rightElbow.y, pose.rightShoulder.x, pose.rightShoulder.y) : rightDist;
+          
+          // Promediamos las distancias para obtener una medida más robusta de la extensión
+          let extensionLeft = (leftDist + leftElbowDist) / 2;
+          let extensionRight = (rightDist + rightElbowDist) / 2;
+          let extension = (extensionLeft + extensionRight) / 2;
+          currentExtension = extension;  // Guardamos la extensión actual para la calibración
+          
+          // Se mapea la extensión a un índice del arreglo de la escala actual.
+          let scaleLength = currentScale.length;
+          let index = floor(map(extension, minExtension, maxExtension, 0, scaleLength - 1, true));
+          index = constrain(index, 0, scaleLength - 1);
+          let freq = currentScale[index];
+          
+          // Mostramos en el canvas la frecuencia calculada, la extensión actual y los valores de calibración
+          fill(255);
+          textSize(20);
+          text("Frecuencia: " + nf(freq, 0, 2) + " Hz", 10, height - 40);
+          text("Extensión: " + nf(extension, 0, 2), 10, height - 10);
+          text("Calibración (Min/Max): " + minExtension + " / " + maxExtension, 10, height - 70);
+          
+          // Si se ha iniciado la reproducción, actualizamos la frecuencia del oscilador.
+          if (playing) {
+            osc.freq(freq);
+            osc.amp(0.5, 0.1);
+          }
+        }
+      }
+    }
+    
+    // Función para iniciar la generación del sonido.
+    function startSound() {
+      playing = true;
+    }
+    
+    // Función para detener la generación del sonido.
+    function stopSound() {
+      playing = false;
+      osc.amp(0, 0.5);
+    }
+    
+    // Actualiza la escala musical según la selección del usuario.
+    function changeScale() {
+      currentScale = scales[scaleSelect.value()];
+    }
+    
+    // Función para calibrar la extensión mínima (brazos pegados al cuerpo).
+    function calibrateMin() {
+      if (currentExtension > 0) {
+        minExtension = currentExtension;
+        console.log("Calibrado Min: " + minExtension);
+      }
+    }
+    
+    // Función para calibrar la extensión máxima (brazos extendidos).
+    function calibrateMax() {
+      if (currentExtension > 0) {
+        maxExtension = currentExtension;
+        console.log("Calibrado Max: " + maxExtension);
+      }
+    }
+  </script>
+</body>
+</html>
